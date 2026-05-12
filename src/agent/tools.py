@@ -7,7 +7,7 @@ from langchain_core.tools import tool
 from langchain_experimental.utilities import PythonREPL
 
 # Path to your ignored data folder
-DATA_DIR = r"C:\Users\Ato_K\Documents\programming\RoomLogic\.agent_data"
+DATA_DIR = r"C:\Users\Ato_K\Documents\programming\SemanticOS\.agent_data"
 JSONL_LOG_PATH = os.path.join(DATA_DIR, "terminal_history.jsonl")
 
 def log_to_jsonl(input_code, output, reasoning, status="success"):

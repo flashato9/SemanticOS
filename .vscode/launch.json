@@ -21,7 +21,7 @@
       "pathMappings": [
         {
           "localRoot": "${workspaceFolder}",
-          "remoteRoot": "/deps/RoomLogic"
+          "remoteRoot": "/deps/SemanticOS"
         }
       ]
     }

@@ -1,4 +1,4 @@
-# RoomLogic
+# SemanticOS
 
 An intelligent agent powered by LangGraph for interactive conversations and decision-making.
 

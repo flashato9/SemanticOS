@@ -35,7 +35,7 @@ data_dir = '.agent_data'
 *   **Capture Output:** Always `print()` results so you can see the output in the tool response.
 
 ## 5. Project Environment
-*   **Project Root:** `C:\Users\Ato_K\Documents\programming\RoomLogic\`
+*   **Project Root:** `C:\Users\Ato_K\Documents\programming\SemanticOS\`
 *   **Hidden Data:** `.agent_data/` (History and this Prompt)
 *   **Prompt Path:** `.agent_data/system_prompt.md`
 

@@ -461,7 +461,7 @@ def get_compiled_graph(db_uri: str):
 #LOAD Variables - DB, prompt, embedding object, graph
 load_dotenv()
 DB_URI = os.getenv("POSTGRES_URI", "postgresql://postgres:postgres@langgraph-postgres:5432/postgres")
-PROMPT_PATH = Path("C:\\Users\\Ato_K\\Documents\\programming\\RoomLogic\\.agent_data\\system_prompt.md")
+PROMPT_PATH = Path("C:\\Users\\Ato_K\\Documents\\programming\\SemanticOS\\.agent_data\\system_prompt.md")
 embedding_object = GoogleGenerativeAIEmbeddings(
     model="models/gemini-embedding-2",
     output_dimensionality=768 
