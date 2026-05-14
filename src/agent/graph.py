@@ -4,6 +4,7 @@ Returns a predefined response. Replace logic and configuration as needed.
 """
 
 from __future__ import annotations
+from datetime import datetime, timezone
 from typing import Annotated, Literal
 import uuid
 
@@ -19,6 +20,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmb
 from langgraph.runtime import Runtime
 from pathlib import Path
 from langgraph.graph.message import add_messages
+from agent.helper_func import get_latest_relevant_memories, get_message_flatten_text_content, is_semantically_redundant
 from agent.prompts import AGENT_PERSONA
 from agent.tools import ALL_TOOLS
 from agent.types import LLM
@@ -220,40 +222,29 @@ async def summarizer(state: State, runtime: Runtime[ContextSchema]) -> State:
     return result
 
 async def brain(state: State, runtime: Runtime[ContextSchema], *, store: BaseStore) -> State:
+    # 1. Setup and context gathering
     llm_config = runtime.context.llm_configuration
     user_messages = get_sanitized_messages(state["messages"])
-    user_id = runtime.context.user_id 
-    namespace = ("memories", user_id)
-    current_persona = runtime.context.persona
-    # 2. Strategy: Only search the store if we are starting a new response
-    # but ALWAYS provide the persona context to the LLM.
+    namespace = ("memories", runtime.context.user_id)
+    
     memory_context = ""
+
+    # 2. Semantic Memory Retrieval (Only on new Human turns)
     if not isinstance(user_messages[-1], ToolMessage):
-        # Extract the user's latest message to use as our search query
-        query_text = ""
-        for msg in reversed(user_messages):
-            if isinstance(msg, HumanMessage):
-                query_text = str(msg.content)
-                break
-        # 2. SEMANTIC SEARCH: Pass the query_text to the store
-        # This tells Postgres to rank memories by relevance to the query!
-        search_results = await store.asearch(
-            namespace, 
-            query=query_text, # <-- The magic parameter
-            limit=5           # Only grab the top 5 most relevant facts
-        )
-        relevant_memories = [res.value["content"] for res in search_results]
-        if relevant_memories:
-            memory_context = "\nRelevant Long-term Preferences:\n" + "\n".join(relevant_memories)
+        query_text = next((str(m.content) for m in reversed(user_messages) if isinstance(m, HumanMessage)), "")
+        if query_text:
+            memory_context = await get_latest_relevant_memories(query_text, namespace, store)
 
-    # 3. Construct Final System Message
-    # This ensures the LLM stays 'in character' even during tool loops
-    full_content = f"{current_persona}\n{memory_context}"
-    final_messages = [SystemMessage(content=full_content)] + user_messages
+    # 3. Message Construction
+    system_content = f"{runtime.context.persona}\n{memory_context}"
+    final_messages = [SystemMessage(content=system_content)] + user_messages
 
-    # 4. Invoke
+    # 4. LLM Execution
     llm_with_tools = await get_llm(llm_config)
     ai_message = await llm_with_tools.ainvoke(final_messages)
+    
+    # Flatten multi-block content for LangSmith/State consistency
+    ai_message = get_message_flatten_text_content(ai_message)
     
     return State(messages=[ai_message])
 
@@ -289,52 +280,52 @@ async def image_processor(state: State, runtime: Runtime[ContextSchema]) -> Stat
     result = State(messages=refined_messages)   
     return result
 
-async def memory_saver(state: State,runtime: Runtime[ContextSchema], *, store: BaseStore):
+async def memory_saver(state: State, runtime: Runtime[ContextSchema], *, store: BaseStore):
     """
-    Analyzes the conversation and saves long-term insights to the Postgres Store.
+    Orchestrates the extraction and deduplicated saving of user memories.
     """
-    # 1. Get the user_id from config
     user_id = runtime.context.user_id
     namespace = ("memories", user_id)
+    thread_id = runtime.execution_info.thread_id
 
-    # 2. Retrieve existing memories to avoid duplicates
-    existing_items = await store.asearch(namespace)
-    existing_memories = "\n".join([f"- {item.value}" for item in existing_items])
-
-    # 3. Use an LLM to extract new insights from the latest messages
-    # We use .with_structured_output to make parsing easy
-    llm = await get_llm(runtime.context.llm_configuration,[])
+    # 1. Extract potential insights from the last exchange
+    last_messages = get_last_turn_messages(state["messages"])
+    
+    llm = await get_llm(runtime.context.llm_configuration, [])
     model = llm.with_structured_output(MemoryExtraction)
-    messages = get_last_turn_messages(state["messages"])
-    system_prompt = f"""
-    You are a memory-distillation assistant. 
-    """
-    human_message=f"""
-    Review the conversation below and identify any NEW facts or preferences about the user.
     
-    EXISTING MEMORIES:
-    {existing_memories}
-    
-    CONVERSATION:
-    {messages} # Review the last exchange
+    system_prompt = """
+    You are a memory-distillation assistant. Extract NEW facts or preferences about the user.
+    - CATEGORY: Use snake_case (e.g., 'food_preference').
+    - TYPE: 'fact' or 'user_preference'.
+    - CONTENT: A clear, standalone statement.
     """
     
-    new_insights = await model.ainvoke([SystemMessage(content=system_prompt)] + [HumanMessage(content=human_message)])
+    extracted = await model.ainvoke([
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=f"CONVERSATION TO REVIEW:\n{last_messages}")
+    ])
+    
+    new_insights = extracted.insights
 
-    # 4. Save the new insights to the Store
-    for fact in new_insights.facts:
-        # We use a UUID or a hash of the fact as the key to prevent duplicates
-        memory_id = str(hash(fact)) 
-        await store.aput(namespace, memory_id, {"content": fact, "type": "fact"})
+    # 2. Process and save unique insights
+    for insight in new_insights:
+        # Targeted check: Does this exact idea already exist in our Vector Store?
+        if await is_semantically_redundant(insight.content, namespace, store):
+            continue # Skip saving to prevent the image_cd47a0.png duplication issue
 
-    for pref in new_insights.style_preferences:
-        # Use a unique ID so we don't overwrite the 'style_guide' every time
-        pref_id = f"pref_{hash(pref)}" 
-        await store.aput(namespace, pref_id, {"content": pref, "type": "user_preference"})
+        # 3. Save the fresh insight with full metadata
+        memory_id = str(uuid.uuid4())
+        value = {
+            "content": insight.content,
+            "type": insight.type,
+            "category": insight.category.lower(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "thread_id": thread_id
+        }
+        await store.aput(namespace, memory_id, value)
 
-    result = State(messages=[])
-    return result
-
+    return State(messages=[])
 
 # Conditional Edges
 def decide_start(state: State, runtime: Runtime[ContextSchema]) -> Literal["summarizer", "brain_node"]:

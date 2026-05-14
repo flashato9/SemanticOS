@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -6,7 +6,7 @@ from agent.prompts import AGENT_PERSONA
 
 class LLMConfiguration(BaseModel):
     "the configuration for the llm"
-    model_name: str = "gemini-flash-lite-latest"
+    model_name: str = "gemini-2.5-flash"
     temperature: float = 1.0
     
 class ToolsConfig(BaseModel):
@@ -67,3 +67,11 @@ class ToolResult(BaseModel):
 class MemoryExtraction(BaseModel):
     facts: list[str] = Field(description="New facts about the user or project")
     style_preferences: list[str] = Field(description="Preferences for how the AI should behave or code")
+    
+class MemoryInsight(BaseModel):
+    content: str = Field(description="The actual fact or preference discovered.")
+    type: Literal["fact", "user_preference"] = Field(description="The classification of the info.")
+    category: str = Field(description="The grouping key (e.g., 'food_pref', 'coding_style'). Use snake_case.")
+
+class MemoryExtraction(BaseModel):
+    insights: List[MemoryInsight]   
